@@ -648,4 +648,18 @@ if __name__ == '__main__':
         except Exception as e:
             logger.error(f"audio_thumb.jpg faylini yaratishda xatolik: {str(e)}")
     
-    main()
+    # Webhook o'rnatish uchun PORT
+    PORT = int(os.environ.get('PORT', '8443'))
+    
+    # Render serverida webhook rejimida ishlash
+    RENDER_EXTERNAL_URL = os.environ.get('RENDER_EXTERNAL_URL')
+    if RENDER_EXTERNAL_URL:
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=TOKEN,
+            webhook_url=f"{RENDER_EXTERNAL_URL}/{TOKEN}"
+        )
+    else:
+        # Mahalliy rivojlantirish uchun polling
+        application.run_polling()
