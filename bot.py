@@ -227,14 +227,28 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return
 
-        # Videoni tahlil qilish
+        # Videoni tahlil qilish - YouTube CAPTCHA muammosiga qarshi yechimlar
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
-            'extract_flat': True
+            'extract_flat': True,
+            'no_check_certificate': True,  # SSL sertifikatini tekshirmaslik
+            'ignoreerrors': True,  # Xatoliklarni e'tiborsiz qoldirish
+            'nocheckcertificate': True,  # SSL sertifikatini tekshirmaslik
+            'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,  # Cookies fayli mavjud bo'lsa
+            'skip_download': True,  # Faqat ma'lumotlarni olish, yuklash emas
+            'extractor_args': {
+                'youtube': {
+                    'skip': ['dash', 'hls'],  # Maxsus formatlarni o'tkazib yuborish
+                    'player_client': ['android', 'web']  # Turli mijozlarni sinab ko'rish
+                }
+            },
+            'socket_timeout': 30  # Timeout muddatini oshirish
         }
         
         try:
+            # YouTube API-ga so'rov yuborish
+            logger.info(f"Video ma'lumotlarini olish boshlandi: {url}")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 formats = info.get('formats', [])
@@ -242,11 +256,24 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 duration = info.get('duration')
                 uploader = info.get('uploader', 'Unknown')
                 thumbnail = info.get('thumbnail')
+                
+            logger.info(f"Video ma'lumotlari muvaffaqiyatli olindi: {title}")
         except Exception as e:
-            logger.error(f"Video ma'lumotlarini olishda xatolik: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"Video ma'lumotlarini olishda xatolik: {error_msg}")
+            
+            # YouTube captcha xatoligini tekshirish
+            if "Sign in to confirm you're not a bot" in error_msg:
+                await status_message.edit_text(
+                    f"{EMOJI['error']} *YouTube captcha xatoligi yuz berdi!*\n\n"
+                    f"Afsuski, YouTube botni bloklagan ko'rinadi. Admin bilan bog'laning.",
+                    parse_mode="Markdown"
+                )
+                return
+            
             await status_message.edit_text(
                 f"{EMOJI['error']} *Video topilmadi yoki xatolik yuz berdi!*\n\n"
-                f"Xatolik: {str(e)}",
+                f"Xatolik: {error_msg}",
                 parse_mode="Markdown"
             )
             return
@@ -488,11 +515,22 @@ async def handle_quality_choice(update: Update, context: ContextTypes.DEFAULT_TY
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_filename = f"{safe_title}_{current_time}"
         
+        # YouTube CAPTCHA muammosiga qarshi yechimlar
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'outtmpl': f'{output_filename}.%(ext)s',
             'postprocessors': [],
+            'no_check_certificate': True,  # SSL sertifikatini tekshirmaslik
+            'ignoreerrors': True,  # Xatoliklarni e'tiborsiz qoldirish
+            'nocheckcertificate': True,  # SSL sertifikatini tekshirmaslik
+            'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,  # Cookies fayli mavjud bo'lsa
+            'socket_timeout': 30,  # Timeout muddatini oshirish
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web']  # Turli mijozlarni sinab ko'rish
+                }
+            }
         }
 
         # Media turiga qarab sozlamalar
@@ -515,14 +553,26 @@ async def handle_quality_choice(update: Update, context: ContextTypes.DEFAULT_TY
 
         # Video yoki audio sifatida yuklash
         try:
+            logger.info(f"Yuklash boshlandi: {url}, format: {media_type}")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
+            logger.info(f"Yuklash tugadi: {output_filename}")
         except Exception as download_err:
-            logger.error(f"Yuklashda xatolik: {str(download_err)}")
-            await query.edit_message_text(
-                f"{EMOJI['error']} *Yuklashda xatolik:* {str(download_err)}",
-                parse_mode="Markdown"
-            )
+            error_msg = str(download_err)
+            logger.error(f"Yuklashda xatolik: {error_msg}")
+            
+            # YouTube captcha xatoligini tekshirish
+            if "Sign in to confirm you're not a bot" in error_msg:
+                await query.edit_message_text(
+                    f"{EMOJI['error']} *YouTube captcha xatoligi yuz berdi!*\n\n"
+                    f"Afsuski, YouTube botni bloklagan ko'rinadi. Admin bilan bog'laning.",
+                    parse_mode="Markdown"
+                )
+            else:
+                await query.edit_message_text(
+                    f"{EMOJI['error']} *Yuklashda xatolik:* {error_msg}",
+                    parse_mode="Markdown"
+                )
             return
 
         # Tayyor fayl nomini aniqlash
