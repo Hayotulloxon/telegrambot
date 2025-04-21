@@ -7,11 +7,11 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes
 )
+import yt_dlp
 import logging
 import re
 import os
-import subprocess
-import urllib.parse
+import asyncio
 from datetime import datetime
 
 # Bot sozlamalari
@@ -45,18 +45,10 @@ EMOJI = {
     "help": "❓"
 }
 
-# YouTube video ID'ni olish uchun
-def extract_video_id(url):
-    try:
-        if 'youtu.be' in url:
-            return url.split('/')[-1].split('?')[0]
-        elif 'youtube.com/watch' in url:
-            return url.split('v=')[1].split('&')[0]
-        elif 'youtube.com/shorts' in url:
-            return url.split('shorts/')[1].split('?')[0]
-    except:
-        return None
-    return None
+# O'zgaruvchilar
+DOWNLOADS_FOLDER = "downloads"
+if not os.path.exists(DOWNLOADS_FOLDER):
+    os.makedirs(DOWNLOADS_FOLDER)
 
 async def check_subscription(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
     """Foydalanuvchi obunasini tekshirish"""
@@ -225,29 +217,53 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return
 
-        # Video ID'ni olish
-        video_id = extract_video_id(url)
-        if not video_id:
+        # Video haqida ma'lumot olish
+        try:
+            # YT-DLP sozlamalari
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'nocheckcertificate': True,
+                'ignoreerrors': True,
+                'extract_flat': True
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                
+            if not info:
+                await status_message.edit_text(
+                    f"{EMOJI['error']} *Video topilmadi!*\n\n"
+                    f"Iltimos, boshqa YouTube havolasini yuboring.",
+                    parse_mode="Markdown"
+                )
+                return
+                
+            title = info.get('title', 'Unknown Title')
+            uploader = info.get('uploader', 'Unknown')
+            
+            # Format tanlash uchun tugmalar
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"{EMOJI['audio']} Audio (MP3)", callback_data=f"dl_audio_{url}")],
+                [InlineKeyboardButton(f"{EMOJI['video']} Video (MP4)", callback_data=f"dl_video_{url}")]
+            ])
+            
             await status_message.edit_text(
-                f"{EMOJI['error']} *Video ID aniqlanmadi!*\n\n"
-                f"Iltimos, to'g'ri YouTube havolasini yuboring.",
+                f"{EMOJI['youtube']} *{title}*\n"
+                f"👤 *Yuklagan:* {uploader}\n\n"
+                f"{EMOJI['download']} *Yuklab olish formatini tanlang:*",
+                parse_mode="Markdown",
+                reply_markup=keyboard
+            )
+            
+        except Exception as e:
+            logger.error(f"Video ma'lumotlarini olishda xatolik: {str(e)}")
+            await status_message.edit_text(
+                f"{EMOJI['error']} *Video ma'lumotlarini olishda xatolik:*\n{str(e)}\n\n"
+                f"Iltimos, boshqa YouTube havolasini yuboring.",
                 parse_mode="Markdown"
             )
             return
-            
-        # Format tanlash uchun tugmalar
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"{EMOJI['audio']} Audio (MP3)", callback_data=f"download_audio_{video_id}")],
-            [InlineKeyboardButton(f"{EMOJI['video']} Video (MP4)", callback_data=f"download_video_{video_id}")]
-        ])
-        
-        await status_message.edit_text(
-            f"{EMOJI['youtube']} *YouTube video aniqlandi!*\n\n"
-            f"Video ID: `{video_id}`\n\n"
-            f"{EMOJI['download']} *Yuklab olish formatini tanlang:*",
-            parse_mode="Markdown",
-            reply_markup=keyboard
-        )
 
     except Exception as e:
         logger.error(f"Download_video funksiyasida xatolik: {str(e)}")
@@ -260,144 +276,134 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception:
             pass
 
-async def handle_download_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Audio yoki video yuklab olish"""
+async def process_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Download formatini tanlash tugmasi bosilganda"""
     query = update.callback_query
     await query.answer()
     
-    try:
-        # Callback data'ni tahlil qilish
-        data = query.data.split('_')
-        if len(data) != 3:
-            await query.edit_message_text(
-                f"{EMOJI['error']} *Noto'g'ri buyruq!*",
-                parse_mode="Markdown"
-            )
-            return
-            
-        download_type = data[1]  # audio yoki video
-        video_id = data[2]  # YouTube video ID
-        
-        # Yuklanayotganini xabar berish
+    # Callback data-ni tahlil qilish
+    data = query.data.split('_')
+    if len(data) < 3:
         await query.edit_message_text(
-            f"{EMOJI['loading']} *{download_type.capitalize()} yuklanmoqda...*\n\n"
-            f"Bu jarayon bir necha daqiqa vaqt olishi mumkin. Iltimos kuting...",
+            f"{EMOJI['error']} *Noto'g'ri format!*",
             parse_mode="Markdown"
         )
+        return
         
-        # Fayl nomini tozalash uchun
-        safe_title = f"youtube_{video_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    format_type = data[1]  # audio yoki video
+    url = '_'.join(data[2:])  # URL (underscore bilan bo'lingan bo'lishi mumkin)
+    
+    # Yuklanayotganini xabar berish
+    await query.edit_message_text(
+        f"{EMOJI['loading']} *{format_type.capitalize()} yuklanmoqda...*\n\n"
+        f"Bu jarayon bir necha daqiqa vaqt olishi mumkin. Iltimos kuting...",
+        parse_mode="Markdown"
+    )
+    
+    try:
+        # Vaqt belgi
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Fayl nomini tozalash
+        safe_filename = f"youtube_{timestamp}"
+        output_path = os.path.join(DOWNLOADS_FOLDER, safe_filename)
         
-        # Yuklab olish
-        output_path = f"{safe_title}"
-        youtube_url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        if download_type == "audio":
-            # Audioni yuklab olish
-            command = [
-                "youtube-dl", "--no-check-certificate", "--no-warnings", 
-                "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0",
-                "-o", f"{output_path}.%(ext)s", youtube_url
-            ]
-            output_file = f"{output_path}.mp3"
+        if format_type == "audio":
+            # Audio yuklab olish sozlamalari
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': f'{output_path}.%(ext)s',
+                'nocheckcertificate': True,
+                'ignoreerrors': True,
+                'prefer_ffmpeg': True,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+            }
             
-            try:
-                subprocess.run(command, check=True, stderr=subprocess.PIPE)
-            except subprocess.CalledProcessError as e:
-                logger.error(f"YouTube-DL xatoligi: {e.stderr.decode()}")
-                # youtube-dl ishlamasa, yt-dlp bilan sinab ko'ramiz
-                command = [
-                    "yt-dlp", "--no-check-certificate", "--no-warnings", 
-                    "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0",
-                    "-o", f"{output_path}.%(ext)s", youtube_url
-                ]
-                subprocess.run(command, check=True)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get('title', 'Unknown')
                 
-            # Yuborish
-            if os.path.exists(output_file):
-                caption = f"{EMOJI['youtube']} *YouTube Audio*\n@YouTubeDownloaderUzBot orqali yuklandi"
-                await context.bot.send_audio(
-                    chat_id=query.message.chat_id,
-                    audio=open(output_file, 'rb'),
-                    caption=caption,
-                    parse_mode="Markdown",
-                    title=f"YouTube Audio - {video_id}"
-                )
-                os.remove(output_file)  # Faylni o'chirish
-                
-                # Muvaffaqiyat xabari
-                await query.message.reply_text(
-                    f"{EMOJI['success']} *Audio muvaffaqiyatli yuklandi!*\n\n"
-                    f"Boshqa video yuklash uchun yangi havola yuboring.",
-                    parse_mode="Markdown"
-                )
-            else:
+            # MP3 faylini topish
+            audio_file = f"{output_path}.mp3"
+            
+            if not os.path.exists(audio_file):
                 await query.edit_message_text(
-                    f"{EMOJI['error']} *Yuklab olishda xatolik!*\n\n"
-                    f"Kerakli fayl hosil bo'lmadi. Iltimos, boshqa havola bilan urinib ko'ring.",
+                    f"{EMOJI['error']} *Audio faylni yuklab olishda xatolik!*\n\n"
+                    f"Fayl topilmadi.",
                     parse_mode="Markdown"
                 )
+                return
                 
-        elif download_type == "video":
-            # Videoni yuklab olish
-            command = [
-                "youtube-dl", "--no-check-certificate", "--no-warnings",
-                "-f", "best", "-o", f"{output_path}.%(ext)s", youtube_url
-            ]
+            # Audiofaylni yuborish
+            caption = f"{EMOJI['youtube']} *{title}*\n@YouTubeDownloaderUzBot orqali yuklandi"
+            await context.bot.send_audio(
+                chat_id=query.message.chat_id,
+                audio=open(audio_file, 'rb'),
+                caption=caption,
+                parse_mode="Markdown",
+                title=title
+            )
             
-            try:
-                subprocess.run(command, check=True, stderr=subprocess.PIPE)
-                # Fayl nomini topish (kengaytma o'zgarishi mumkin)
-                video_files = [f for f in os.listdir('.') if f.startswith(output_path)]
-                if not video_files:
-                    raise FileNotFoundError("Video fayli topilmadi")
-                    
-                output_file = video_files[0]
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                if isinstance(e, subprocess.CalledProcessError):
-                    logger.error(f"YouTube-DL xatoligi: {e.stderr.decode()}")
-                else:
-                    logger.error(f"Fayl topilmadi: {str(e)}")
-                    
-                # youtube-dl ishlamasa, yt-dlp bilan sinab ko'ramiz
-                command = [
-                    "yt-dlp", "--no-check-certificate", "--no-warnings",
-                    "-f", "best", "-o", f"{output_path}.%(ext)s", youtube_url
-                ]
-                subprocess.run(command, check=True)
-                
-                # Fayl nomini topish (kengaytma o'zgarishi mumkin)
-                video_files = [f for f in os.listdir('.') if f.startswith(output_path)]
-                if not video_files:
-                    raise FileNotFoundError("Video fayli topilmadi")
-                    
-                output_file = video_files[0]
+            # Faylni o'chirish
+            os.remove(audio_file)
             
-            # Yuborish
-            if os.path.exists(output_file):
-                caption = f"{EMOJI['youtube']} *YouTube Video*\n@YouTubeDownloaderUzBot orqali yuklandi"
-                await context.bot.send_video(
-                    chat_id=query.message.chat_id,
-                    video=open(output_file, 'rb'),
-                    caption=caption,
-                    parse_mode="Markdown",
-                    supports_streaming=True
-                )
-                os.remove(output_file)  # Faylni o'chirish
+            # Muvaffaqiyatli xabar
+            await query.edit_message_text(
+                f"{EMOJI['success']} *Audio yuklab olindi!*\n\n"
+                f"*{title}*\n\n"
+                f"Boshqa video yuklab olish uchun yangi YouTube havolasini yuboring.",
+                parse_mode="Markdown"
+            )
+            
+        elif format_type == "video":
+            # Video yuklab olish sozlamalari
+            ydl_opts = {
+                'format': 'best',
+                'outtmpl': f'{output_path}.%(ext)s',
+                'nocheckcertificate': True,
+                'ignoreerrors': True,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get('title', 'Unknown')
                 
-                # Muvaffaqiyat xabari
-                await query.message.reply_text(
-                    f"{EMOJI['success']} *Video muvaffaqiyatli yuklandi!*\n\n"
-                    f"Boshqa video yuklash uchun yangi havola yuboring.",
-                    parse_mode="Markdown"
-                )
-            else:
+            # Faylni topish
+            video_files = [f for f in os.listdir(DOWNLOADS_FOLDER) if f.startswith(os.path.basename(output_path))]
+            if not video_files:
                 await query.edit_message_text(
-                    f"{EMOJI['error']} *Yuklab olishda xatolik!*\n\n"
-                    f"Kerakli fayl hosil bo'lmadi. Iltimos, boshqa havola bilan urinib ko'ring.",
+                    f"{EMOJI['error']} *Video faylni yuklab olishda xatolik!*\n\n"
+                    f"Fayl topilmadi.",
                     parse_mode="Markdown"
                 )
-        
+                return
+                
+            video_file = os.path.join(DOWNLOADS_FOLDER, video_files[0])
+            
+            # Videofaylni yuborish
+            caption = f"{EMOJI['youtube']} *{title}*\n@YouTubeDownloaderUzBot orqali yuklandi"
+            await context.bot.send_video(
+                chat_id=query.message.chat_id,
+                video=open(video_file, 'rb'),
+                caption=caption,
+                parse_mode="Markdown",
+                supports_streaming=True
+            )
+            
+            # Faylni o'chirish
+            os.remove(video_file)
+            
+            # Muvaffaqiyatli xabar
+            await query.edit_message_text(
+                f"{EMOJI['success']} *Video yuklab olindi!*\n\n"
+                f"*{title}*\n\n"
+                f"Boshqa video yuklab olish uchun yangi YouTube havolasini yuboring.",
+                parse_mode="Markdown"
+            )
+            
         else:
             await query.edit_message_text(
                 f"{EMOJI['error']} *Noto'g'ri format turi!*",
@@ -405,15 +411,12 @@ async def handle_download_choice(update: Update, context: ContextTypes.DEFAULT_T
             )
             
     except Exception as e:
-        logger.error(f"Handle_download_choice funksiyasida xatolik: {str(e)}")
-        try:
-            await query.edit_message_text(
-                f"{EMOJI['error']} *Yuklab olishda xatolik:* {str(e)}\n\n"
-                f"Iltimos, boshqa havola bilan urinib ko'ring yoki keyinroq qayta harakat qiling.",
-                parse_mode="Markdown"
-            )
-        except Exception:
-            pass
+        logger.error(f"Process_download funksiyasida xatolik: {str(e)}")
+        await query.edit_message_text(
+            f"{EMOJI['error']} *Yuklab olishda xatolik:* {str(e)}\n\n"
+            f"Iltimos, boshqa havola bilan urinib ko'ring yoki keyinroq qayta harakat qiling.",
+            parse_mode="Markdown"
+        )
 
 if __name__ == '__main__':
     # audio_thumb.jpg faylini yaratish (agar mavjud bo'lmasa)
@@ -434,7 +437,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CallbackQueryHandler(confirm_subscription, pattern="^confirm_subscribe$"))
     application.add_handler(CallbackQueryHandler(help_callback, pattern="^help$"))
-    application.add_handler(CallbackQueryHandler(handle_download_choice, pattern="^download_"))
+    application.add_handler(CallbackQueryHandler(process_download, pattern="^dl_"))
     
     application.add_handler(MessageHandler(
         filters.Regex(r'^(https?\:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$'),
