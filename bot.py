@@ -605,8 +605,20 @@ async def handle_quality_choice(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception:
             pass
 
-def main() -> None:
-    """Asosiy funksiya"""
+# Asosiy funksiya yo'q - Render uchun to'g'ridan-to'g'ri main blokdan foydalanish
+
+if __name__ == '__main__':
+    # audio_thumb.jpg faylini yaratish (agar mavjud bo'lmasa)
+    if not os.path.exists("audio_thumb.jpg"):
+        try:
+            # Bo'sh fayl yaratish
+            with open("audio_thumb.jpg", "w") as f:
+                f.write("")
+            print("audio_thumb.jpg fayli yaratildi.")
+        except Exception as e:
+            logger.error(f"audio_thumb.jpg faylini yaratishda xatolik: {str(e)}")
+    
+    # Botni ishga tushirish
     application = Application.builder().token(TOKEN).build()
 
     # Handler-lar
@@ -633,27 +645,13 @@ def main() -> None:
         )
     ))
 
-    # Botni ishga tushirish
-    print(f"{EMOJI['success']} Bot ishga tushdi!")
-    application.run_polling()
-
-if __name__ == '__main__':
-    # audio_thumb.jpg faylini yaratish (agar mavjud bo'lmasa)
-    if not os.path.exists("audio_thumb.jpg"):
-        try:
-            # Bo'sh fayl yaratish
-            with open("audio_thumb.jpg", "w") as f:
-                f.write("")
-            print("audio_thumb.jpg fayli yaratildi.")
-        except Exception as e:
-            logger.error(f"audio_thumb.jpg faylini yaratishda xatolik: {str(e)}")
-    
     # Webhook o'rnatish uchun PORT
     PORT = int(os.environ.get('PORT', '8443'))
     
     # Render serverida webhook rejimida ishlash
     RENDER_EXTERNAL_URL = os.environ.get('RENDER_EXTERNAL_URL')
     if RENDER_EXTERNAL_URL:
+        print(f"Webhook rejimida ishga tushirilmoqda: {RENDER_EXTERNAL_URL}")
         application.run_webhook(
             listen="0.0.0.0",
             port=PORT,
@@ -662,4 +660,5 @@ if __name__ == '__main__':
         )
     else:
         # Mahalliy rivojlantirish uchun polling
+        print(f"{EMOJI['success']} Bot polling rejimida ishga tushdi!")
         application.run_polling()
