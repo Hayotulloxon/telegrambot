@@ -1,2 +1,2 @@
 python-telegram-bot[webhooks]==20.7
-youtube-dl==2021.12.17
+yt-dlp==2023.11.16
