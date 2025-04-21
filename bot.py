@@ -13,6 +13,8 @@ import re
 import os
 import asyncio
 from datetime import datetime
+import ssl
+import certifi
 
 # Bot sozlamalari
 TOKEN = '7987802742:AAEVZTrn1_8w0l601bLMn4O-ONiw4w9PWNA'
@@ -237,6 +239,7 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             'nocheckcertificate': True,  # SSL sertifikatini tekshirmaslik
             'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,  # Cookies fayli mavjud bo'lsa
             'skip_download': True,  # Faqat ma'lumotlarni olish, yuklash emas
+            'force_generic_extractor': True,  # Generic extractor-ni majburiy ishlatish
             'extractor_args': {
                 'youtube': {
                     'skip': ['dash', 'hls'],  # Maxsus formatlarni o'tkazib yuborish
@@ -267,6 +270,15 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await status_message.edit_text(
                     f"{EMOJI['error']} *YouTube captcha xatoligi yuz berdi!*\n\n"
                     f"Afsuski, YouTube botni bloklagan ko'rinadi. Admin bilan bog'laning.",
+                    parse_mode="Markdown"
+                )
+                return
+            
+            # SSL sertifikat xatoligini tekshirish
+            if "CERTIFICATE_VERIFY_FAILED" in error_msg or "SSL" in error_msg:
+                await status_message.edit_text(
+                    f"{EMOJI['error']} *SSL sertifikat xatoligi yuz berdi!*\n\n"
+                    f"Botda texnik xatolik. Admin bilan bog'laning.",
                     parse_mode="Markdown"
                 )
                 return
@@ -526,6 +538,7 @@ async def handle_quality_choice(update: Update, context: ContextTypes.DEFAULT_TY
             'nocheckcertificate': True,  # SSL sertifikatini tekshirmaslik
             'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,  # Cookies fayli mavjud bo'lsa
             'socket_timeout': 30,  # Timeout muddatini oshirish
+            'force_generic_extractor': True,  # Generic extractor-ni majburiy ishlatish
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android', 'web']  # Turli mijozlarni sinab ko'rish
@@ -566,6 +579,13 @@ async def handle_quality_choice(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.edit_message_text(
                     f"{EMOJI['error']} *YouTube captcha xatoligi yuz berdi!*\n\n"
                     f"Afsuski, YouTube botni bloklagan ko'rinadi. Admin bilan bog'laning.",
+                    parse_mode="Markdown"
+                )
+            # SSL sertifikat xatoligini tekshirish
+            elif "CERTIFICATE_VERIFY_FAILED" in error_msg or "SSL" in error_msg:
+                await query.edit_message_text(
+                    f"{EMOJI['error']} *SSL sertifikat xatoligi yuz berdi!*\n\n"
+                    f"Botda texnik xatolik. Admin bilan bog'laning.",
                     parse_mode="Markdown"
                 )
             else:
@@ -658,6 +678,20 @@ async def handle_quality_choice(update: Update, context: ContextTypes.DEFAULT_TY
 # Asosiy funksiya yo'q - Render uchun to'g'ridan-to'g'ri main blokdan foydalanish
 
 if __name__ == '__main__':
+    # SSL muammosini hal qilish
+    try:
+        _create_unverified_https_context = ssl._create_unverified_context
+    except AttributeError:
+        # Python 2.7.9 oldingi versiyalari uchun
+        pass
+    else:
+        # SSL sertifikatlarni tekshirmaslik
+        ssl._create_default_https_context = _create_unverified_https_context
+    
+    # Certifi sertifikatlarini o'rnatish
+    os.environ['SSL_CERT_FILE'] = certifi.where()
+    os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
+    
     # audio_thumb.jpg faylini yaratish (agar mavjud bo'lmasa)
     if not os.path.exists("audio_thumb.jpg"):
         try:
